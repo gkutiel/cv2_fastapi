@@ -5,14 +5,18 @@ from fastapi import FastAPI, WebSocket
 from mediapipe.tasks import python
 from mediapipe.tasks.python import vision
 
-base_options = python.BaseOptions('face_landmarker_v2_with_blendshapes.task')
-options = vision.FaceLandmarkerOptions(
-    base_options=base_options,
-    output_face_blendshapes=False,
-    output_facial_transformation_matrixes=False,
-    num_faces=1)
+face_detector = vision.FaceDetector.create_from_options(
+    vision.FaceDetectorOptions(
+        base_options=python.BaseOptions('detector.tflite'),
+        min_detection_confidence=0.5))
 
-fld_detector = vision.FaceLandmarker.create_from_options(options)
+fld_detector = vision.FaceLandmarker.create_from_options(
+    vision.FaceLandmarkerOptions(
+        base_options=python.BaseOptions(
+            'face_landmarker_v2_with_blendshapes.task'),
+        output_face_blendshapes=False,
+        output_facial_transformation_matrixes=False,
+        num_faces=1))
 
 face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
 
@@ -27,19 +31,26 @@ def frames():
         h, w, *_ = frame.shape
         h, w = h//2, w//2
         frame = cv2.resize(frame, (w, h))
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        # gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
-        faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-        for (x, y, w, h) in faces:
-            # To draw a rectangle in a face
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 255, 0), 2)
+        # faces = face_cascade.detectMultiScale(gray, 1.3, 5)
+        mp_frame = mp.Image(
+            image_format=mp.ImageFormat.SRGB,
+            data=frame)
+
+        res = face_detector.detect(mp_frame)
+        if res.detections:
+            bbox = res.detections[0].bounding_box
+            x, y, w, h = bbox.origin_x, bbox.origin_y, bbox.width, bbox.height
             face = frame[y:y+h, x:x+w, :].astype('uint8')
 
-            img = mp.Image(
+            cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 255, 0), 2)
+
+            face = mp.Image(
                 image_format=mp.ImageFormat.SRGB,
                 data=face)
 
-            res = fld_detector.detect(img)
+            res = fld_detector.detect(face)
             if res.face_landmarks:
                 for landmarks in res.face_landmarks:
                     for landmark in landmarks:
