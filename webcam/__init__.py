@@ -13,6 +13,9 @@ def frames():
 
     while True:
         _, frame = cap.read()
+        h, w, *_ = frame.shape
+
+        frame = cv2.resize(frame, (w//4, h//4))
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
 
