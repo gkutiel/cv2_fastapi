@@ -10,6 +10,7 @@ python = "^3.12"
 opencv-python = "^4.10.0.84"
 fastapi = "^0.111.0"
 websockets = "^12.0"
+mediapipe = "^0.10.14"
 
 
 [tool.poetry.group.dev.dependencies]
