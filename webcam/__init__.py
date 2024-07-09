@@ -54,64 +54,6 @@ class FLD:
         return cls()
 
 
-def gen_frames():
-    cap = cv2.VideoCapture(0)
-
-    while True:
-        _, frame = cap.read()
-        h, w, *_ = frame.shape
-        yield cv2.resize(frame, (w//2, h//2))
-
-
-def gen_bboxs(frames: Iterable[np.ndarray]):
-    face_detection_options = FaceDetectorOptions(
-        base_options=python.BaseOptions('detector.tflite'),
-        min_detection_confidence=0.5)
-
-    with FaceDetector.create_from_options(face_detection_options) as face_detector:
-        for frame in frames:
-            img = mp.Image(
-                image_format=ImageFormat.SRGB,
-                data=frame)
-
-            faces = face_detector.detect(img).detections
-
-            if not faces:
-                yield BBox()
-
-            if faces:
-                face = faces[0]
-                yield BBox.from_mp(face.bounding_box)
-
-
-def gen_flds(frames: Iterable[tuple[np.ndarray, BBox]]):
-    fld_options = FaceLandmarkerOptions(
-        base_options=python.BaseOptions(
-            'face_landmarker_v2_with_blendshapes.task'),
-        running_mode=RunningMode.IMAGE,
-        output_face_blendshapes=False,
-        output_facial_transformation_matrixes=False,
-        num_faces=1)
-
-    with FaceLandmarker.create_from_options(fld_options) as face_landmarker:
-        for frame, bbox in frames:
-            if bbox.is_empty:
-                yield []
-                continue
-
-            img = mp.Image(
-                image_format=ImageFormat.SRGB,
-                data=frame)
-
-            flds = face_landmarker.detect(img).face_landmarks
-
-            if not flds:
-                yield []
-                continue
-
-            yield flds[0]
-
-
 def draw_bbox(frame: np.ndarray, bbox: BBox):
     x, y, w, h = bbox.xywh
     cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
@@ -158,6 +100,68 @@ def draw_landmarks_on_image(img: np.ndarray, fld: list[NormalizedLandmark]):
         .get_default_face_mesh_iris_connections_style())
 
     return annotated_image
+
+
+def gen_frames():
+    cap = cv2.VideoCapture(0)
+
+    while True:
+        _, frame = cap.read()
+        h, w, *_ = frame.shape
+        yield cv2.resize(frame, (w//2, h//2))
+
+
+def gen_bboxs(frames: Iterable[np.ndarray]):
+    face_detection_options = FaceDetectorOptions(
+        base_options=python.BaseOptions('detector.tflite'),
+        min_detection_confidence=0.5)
+
+    with FaceDetector.create_from_options(face_detection_options) as face_detector:
+        for frame in frames:
+            img = mp.Image(
+                image_format=ImageFormat.SRGB,
+                data=frame)
+
+            faces = face_detector.detect(img).detections
+
+            if not faces:
+                yield BBox()
+
+            if faces:
+                face = faces[0]
+                yield BBox.from_mp(face.bounding_box)
+
+
+def gen_flds(frames: Iterable[tuple[np.ndarray, BBox]]):
+    fld_options = FaceLandmarkerOptions(
+        base_options=python.BaseOptions(
+            'face_landmarker_v2_with_blendshapes.task'),
+        running_mode=RunningMode.IMAGE,
+        output_face_blendshapes=False,
+        output_facial_transformation_matrixes=False,
+        num_faces=1)
+
+    with FaceLandmarker.create_from_options(fld_options) as face_landmarker:
+        for frame, bbox in frames:
+            if bbox.is_empty:
+                yield []
+                continue
+
+            # x, y, w, h = bbox.xywh
+            # face = frame[y:y+h, x:x+w, :].astype(np.uint8)
+            face = frame
+
+            img = mp.Image(
+                image_format=ImageFormat.SRGB,
+                data=face)
+
+            flds = face_landmarker.detect(img).face_landmarks
+
+            if not flds:
+                yield []
+                continue
+
+            yield flds[0]
 
 
 @app.websocket("/ws")
