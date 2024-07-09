@@ -20,6 +20,8 @@ FaceDetectorOptions = mp.tasks.vision.FaceDetectorOptions
 FaceLandmarker = mp.tasks.vision.FaceLandmarker
 FaceLandmarkerOptions = mp.tasks.vision.FaceLandmarkerOptions
 ImageFormat = mp.ImageFormat
+PoseLandmarker = mp.tasks.vision.PoseLandmarker
+PoseLandmarkerOptions = mp.tasks.vision.PoseLandmarkerOptions
 
 
 app = FastAPI(debug=True)
@@ -60,11 +62,29 @@ def draw_bbox(frame: np.ndarray, bbox: BBox):
     return frame
 
 
+def draw_pose_on_image(img: np.ndarray, pose: list[NormalizedLandmark]):
+    if not pose:
+        return img
+
+    pose_landmarks_proto = landmark_pb2.NormalizedLandmarkList()  # type: ignore
+    pose_landmarks_proto.landmark.extend([
+        landmark_pb2.NormalizedLandmark(  # type: ignore
+            x=landmark.x,
+            y=landmark.y,
+            z=landmark.z) for landmark in pose])
+
+    solutions.drawing_utils.draw_landmarks(  # type: ignore
+        img,
+        pose_landmarks_proto,
+        solutions.pose.POSE_CONNECTIONS,  # type: ignore
+        solutions.drawing_styles.get_default_pose_landmarks_style())  # type: ignore
+
+    return img
+
+
 def draw_landmarks_on_image(img: np.ndarray, fld: list[NormalizedLandmark]):
     if not fld:
         return img
-
-    annotated_image = np.copy(img)
 
     # Draw the face landmarks.
     face_landmarks_proto = landmark_pb2.NormalizedLandmarkList()  # type: ignore
@@ -76,7 +96,7 @@ def draw_landmarks_on_image(img: np.ndarray, fld: list[NormalizedLandmark]):
         for landmark in fld])
 
     solutions.drawing_utils.draw_landmarks(  # type: ignore
-        image=annotated_image,
+        image=img,
         landmark_list=face_landmarks_proto,
         connections=mp.solutions.face_mesh.FACEMESH_TESSELATION,  # type: ignore
         landmark_drawing_spec=None,
@@ -84,7 +104,7 @@ def draw_landmarks_on_image(img: np.ndarray, fld: list[NormalizedLandmark]):
         .get_default_face_mesh_tesselation_style())
 
     solutions.drawing_utils.draw_landmarks(  # type: ignore
-        image=annotated_image,
+        image=img,
         landmark_list=face_landmarks_proto,
         connections=mp.solutions.face_mesh.FACEMESH_CONTOURS,  # type: ignore
         landmark_drawing_spec=None,
@@ -92,14 +112,14 @@ def draw_landmarks_on_image(img: np.ndarray, fld: list[NormalizedLandmark]):
         .get_default_face_mesh_contours_style())
 
     solutions.drawing_utils.draw_landmarks(  # type: ignore
-        image=annotated_image,
+        image=img,
         landmark_list=face_landmarks_proto,
         connections=mp.solutions.face_mesh.FACEMESH_IRISES,  # type: ignore
         landmark_drawing_spec=None,
         connection_drawing_spec=mp.solutions.drawing_styles  # type: ignore
         .get_default_face_mesh_iris_connections_style())
 
-    return annotated_image
+    return img
 
 
 def gen_frames():
@@ -132,7 +152,29 @@ def gen_bboxs(frames: Iterable[np.ndarray]):
                 yield BBox.from_mp(face.bounding_box)
 
 
-def gen_flds(frames: Iterable[tuple[np.ndarray, BBox]]):
+def gen_pose(frames: Iterable[np.ndarray]):
+    base_options = python.BaseOptions(model_asset_path='pose_landmarker.task')
+    options = PoseLandmarkerOptions(
+        base_options=base_options,
+        running_mode=RunningMode.IMAGE,
+        output_segmentation_masks=False)
+
+    with PoseLandmarker.create_from_options(options) as pose_landmarker:
+        for frame in frames:
+            img = mp.Image(
+                image_format=ImageFormat.SRGB,
+                data=frame)
+
+            pose = pose_landmarker.detect(img).pose_landmarks
+
+            if not pose:
+                yield []
+                continue
+
+            yield pose[0]
+
+
+def gen_flds(frames: Iterable[np.ndarray]):
     fld_options = FaceLandmarkerOptions(
         base_options=python.BaseOptions(
             'face_landmarker_v2_with_blendshapes.task'),
@@ -142,18 +184,10 @@ def gen_flds(frames: Iterable[tuple[np.ndarray, BBox]]):
         num_faces=1)
 
     with FaceLandmarker.create_from_options(fld_options) as face_landmarker:
-        for frame, bbox in frames:
-            if bbox.is_empty:
-                yield []
-                continue
-
-            # x, y, w, h = bbox.xywh
-            # face = frame[y:y+h, x:x+w, :].astype(np.uint8)
-            face = frame
-
+        for frame in frames:
             img = mp.Image(
                 image_format=ImageFormat.SRGB,
-                data=face)
+                data=frame)
 
             flds = face_landmarker.detect(img).face_landmarks
 
@@ -167,17 +201,18 @@ def gen_flds(frames: Iterable[tuple[np.ndarray, BBox]]):
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     await websocket.accept()
+
     frames = gen_frames()
-    frames, frames1, frames2 = tee(frames, 3)
+    frames, frames_bbox, frames_fld, frames_pos = tee(frames, 4)
 
-    bboxs = gen_bboxs(frames1)
-    bboxs, bboxs1 = tee(bboxs, 2)
+    bboxs = gen_bboxs(frames_bbox)
+    flds = gen_flds(frames_fld)
+    poses = gen_pose(frames_pos)
 
-    flds = gen_flds(zip(frames2, bboxs1))
-
-    for frame, bbox, fld in zip(frames, bboxs, flds):
+    for frame, bbox, fld, pose in zip(frames, bboxs, flds, poses):
         frame = draw_bbox(frame, bbox)
         frame = draw_landmarks_on_image(frame, fld)
+        frame = draw_pose_on_image(frame, pose)
 
         await websocket.send_bytes(cv2.imencode('.jpg', frame)[1].tobytes())
 
