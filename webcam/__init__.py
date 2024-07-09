@@ -1,70 +1,180 @@
+from ast import List
+from dataclasses import dataclass
+from itertools import tee
+from typing import Iterable
+
 import cv2
 import mediapipe as mp
+import numpy as np
 import uvicorn
 from fastapi import FastAPI, WebSocket
+from mediapipe import solutions
+from mediapipe.framework.formats import landmark_pb2
 from mediapipe.tasks import python
-from mediapipe.tasks.python import vision
+from mediapipe.tasks.python.components.containers import NormalizedLandmark
+from mediapipe.tasks.python.vision.face_landmarker import FaceLandmarkerResult
 
-face_detector = vision.FaceDetector.create_from_options(
-    vision.FaceDetectorOptions(
-        base_options=python.BaseOptions('detector.tflite'),
-        min_detection_confidence=0.5))
+RunningMode = mp.tasks.vision.RunningMode
+FaceDetector = mp.tasks.vision.FaceDetector
+FaceDetectorOptions = mp.tasks.vision.FaceDetectorOptions
+FaceLandmarker = mp.tasks.vision.FaceLandmarker
+FaceLandmarkerOptions = mp.tasks.vision.FaceLandmarkerOptions
+ImageFormat = mp.ImageFormat
 
-fld_detector = vision.FaceLandmarker.create_from_options(
-    vision.FaceLandmarkerOptions(
-        base_options=python.BaseOptions(
-            'face_landmarker_v2_with_blendshapes.task'),
-        output_face_blendshapes=False,
-        output_facial_transformation_matrixes=False,
-        num_faces=1))
-
-face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
 
 app = FastAPI(debug=True)
 
+# face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
 
-def frames():
+
+@dataclass
+class BBox:
+    x: int = 0
+    y: int = 0
+    w: int = 0
+    h: int = 0
+
+    @classmethod
+    def from_mp(cls, mp_bbox):
+        return cls(mp_bbox.origin_x, mp_bbox.origin_y, mp_bbox.width, mp_bbox.height)
+
+    @property
+    def xywh(self):
+        return self.x, self.y, self.w, self.h
+
+    @property
+    def is_empty(self):
+        return self.xywh == (0, 0, 0, 0)
+
+
+@dataclass
+class FLD:
+    @classmethod
+    def from_mp(cls, mp_fld: list[NormalizedLandmark]):
+        return cls()
+
+
+def gen_frames():
     cap = cv2.VideoCapture(0)
 
     while True:
         _, frame = cap.read()
         h, w, *_ = frame.shape
-        h, w = h//2, w//2
-        frame = cv2.resize(frame, (w, h))
-        # gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        yield cv2.resize(frame, (w//2, h//2))
 
-        # faces = face_cascade.detectMultiScale(gray, 1.3, 5)
-        mp_frame = mp.Image(
-            image_format=mp.ImageFormat.SRGB,
-            data=frame)
 
-        res = face_detector.detect(mp_frame)
-        if res.detections:
-            bbox = res.detections[0].bounding_box
-            x, y, w, h = bbox.origin_x, bbox.origin_y, bbox.width, bbox.height
-            face = frame[y:y+h, x:x+w, :].astype('uint8')
+def gen_bboxs(frames: Iterable[np.ndarray]):
+    face_detection_options = FaceDetectorOptions(
+        base_options=python.BaseOptions('detector.tflite'),
+        min_detection_confidence=0.5)
 
-            cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 255, 0), 2)
+    with FaceDetector.create_from_options(face_detection_options) as face_detector:
+        for frame in frames:
+            img = mp.Image(
+                image_format=ImageFormat.SRGB,
+                data=frame)
 
-            face = mp.Image(
-                image_format=mp.ImageFormat.SRGB,
-                data=face)
+            faces = face_detector.detect(img).detections
 
-            res = fld_detector.detect(face)
-            if res.face_landmarks:
-                for landmarks in res.face_landmarks:
-                    for landmark in landmarks:
-                        fx, fy = landmark.x, landmark.y
-                        fx, fy = int(fx*w), int(fy*h)
-                        cv2.circle(frame, (x + fx, y + fy), 2, (0, 255, 0), -1)
+            if not faces:
+                yield BBox()
 
-        yield frame
+            if faces:
+                face = faces[0]
+                yield BBox.from_mp(face.bounding_box)
+
+
+def gen_flds(frames: Iterable[tuple[np.ndarray, BBox]]):
+    fld_options = FaceLandmarkerOptions(
+        base_options=python.BaseOptions(
+            'face_landmarker_v2_with_blendshapes.task'),
+        running_mode=RunningMode.IMAGE,
+        output_face_blendshapes=False,
+        output_facial_transformation_matrixes=False,
+        num_faces=1)
+
+    with FaceLandmarker.create_from_options(fld_options) as face_landmarker:
+        for frame, bbox in frames:
+            if bbox.is_empty:
+                yield []
+                continue
+
+            img = mp.Image(
+                image_format=ImageFormat.SRGB,
+                data=frame)
+
+            flds = face_landmarker.detect(img).face_landmarks
+
+            if not flds:
+                yield []
+                continue
+
+            yield flds[0]
+
+
+def draw_bbox(frame: np.ndarray, bbox: BBox):
+    x, y, w, h = bbox.xywh
+    cv2.rectangle(frame, (x, y), (x+w, y+h), (255, 0, 0), 2)
+    return frame
+
+
+def draw_landmarks_on_image(img: np.ndarray, fld: list[NormalizedLandmark]):
+    if not fld:
+        return img
+
+    annotated_image = np.copy(img)
+
+    # Draw the face landmarks.
+    face_landmarks_proto = landmark_pb2.NormalizedLandmarkList()  # type: ignore
+    face_landmarks_proto.landmark.extend([
+        landmark_pb2.NormalizedLandmark(  # type: ignore
+            x=landmark.x,
+            y=landmark.y,
+            z=landmark.z)
+        for landmark in fld])
+
+    solutions.drawing_utils.draw_landmarks(  # type: ignore
+        image=annotated_image,
+        landmark_list=face_landmarks_proto,
+        connections=mp.solutions.face_mesh.FACEMESH_TESSELATION,  # type: ignore
+        landmark_drawing_spec=None,
+        connection_drawing_spec=mp.solutions.drawing_styles  # type: ignore
+        .get_default_face_mesh_tesselation_style())
+
+    solutions.drawing_utils.draw_landmarks(  # type: ignore
+        image=annotated_image,
+        landmark_list=face_landmarks_proto,
+        connections=mp.solutions.face_mesh.FACEMESH_CONTOURS,  # type: ignore
+        landmark_drawing_spec=None,
+        connection_drawing_spec=mp.solutions.drawing_styles  # type: ignore
+        .get_default_face_mesh_contours_style())
+
+    solutions.drawing_utils.draw_landmarks(  # type: ignore
+        image=annotated_image,
+        landmark_list=face_landmarks_proto,
+        connections=mp.solutions.face_mesh.FACEMESH_IRISES,  # type: ignore
+        landmark_drawing_spec=None,
+        connection_drawing_spec=mp.solutions.drawing_styles  # type: ignore
+        .get_default_face_mesh_iris_connections_style())
+
+    return annotated_image
 
 
 @app.websocket("/ws")
-async def websocket_endpoint(websocket: WebSocket):
+async def ws(websocket: WebSocket):
     await websocket.accept()
-    for frame in frames():
+    frames = gen_frames()
+    frames, frames1, frames2 = tee(frames, 3)
+
+    bboxs = gen_bboxs(frames1)
+    bboxs, bboxs1 = tee(bboxs, 2)
+
+    flds = gen_flds(zip(frames2, bboxs1))
+
+    for frame, bbox, fld in zip(frames, bboxs, flds):
+        frame = draw_bbox(frame, bbox)
+        frame = draw_landmarks_on_image(frame, fld)
+
         await websocket.send_bytes(cv2.imencode('.jpg', frame)[1].tobytes())
 
 if __name__ == '__main__':
