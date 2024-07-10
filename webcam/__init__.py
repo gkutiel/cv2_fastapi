@@ -95,7 +95,8 @@ def lms2array(lms: list[Landmark]):
 
 def norm2abs(frame: np.ndarray, point: np.ndarray):
     assert point.shape == (2,), point.shape
-    return (point * frame.shape[:2]).astype(int)
+    h, w, _ = frame.shape
+    return (point * [w, h]).astype(int)
 
 
 def draw_head_pose(crop: np.ndarray | None, dir: np.ndarray | None, fld: FaceLandmarkerResult | None):
@@ -104,7 +105,7 @@ def draw_head_pose(crop: np.ndarray | None, dir: np.ndarray | None, fld: FaceLan
         assert dir is not None
         assert fld is not None
 
-        start = fld.face_landmarks[0][0]
+        start = fld.face_landmarks[0][4]
         start = np.array([start.x, start.y])
 
         end = start + dir[:2] * 3
@@ -219,6 +220,7 @@ def gen_pose(frames: Iterable[np.ndarray | None]):
     base_options = python.BaseOptions(model_asset_path='pose_landmarker.task')
     options = PoseLandmarkerOptions(
         base_options=base_options,
+        min_pose_detection_confidence=0.45,
         running_mode=RunningMode.IMAGE,
         output_segmentation_masks=False)
 
@@ -253,6 +255,8 @@ def gen_crop_from_pose(frames: Iterable[np.ndarray | None], poses: Iterable[Pose
             x1, y1 = lms.min(axis=0)
             x2, y2 = lms.max(axis=0)
             h, w = y2 - y1, x2 - x1
+            h = max(128, h)
+            w = max(128, w)
 
             yield frame[y1-h:y2+h, x1-w//2:x2+w//2, :].astype(np.uint8)
 
@@ -276,7 +280,7 @@ def gen_head_poses(poses: Iterable[PoseLandmarkerResult | None]):
             yield None
 
 
-def gen_flds(frames: Iterable[np.ndarray | None]):
+def gen_flds(crops: Iterable[np.ndarray | None]):
     fld_options = FaceLandmarkerOptions(
         base_options=python.BaseOptions(
             'face_landmarker_v2_with_blendshapes.task'),
@@ -286,9 +290,10 @@ def gen_flds(frames: Iterable[np.ndarray | None]):
         num_faces=1)
 
     with FaceLandmarker.create_from_options(fld_options) as face_landmarker:
-        for frame in frames:
+        for frame in crops:
             try:
                 assert frame is not None
+                assert all(d > 0 for d in frame.shape)
 
                 img = mp.Image(
                     image_format=ImageFormat.SRGB,
