@@ -1,3 +1,4 @@
+import base64
 import traceback
 from dataclasses import dataclass
 from itertools import tee
@@ -28,7 +29,7 @@ Landmarks = list[NormalizedLandmark]
 
 app = FastAPI(debug=True)
 
-IMG_SIZE = np.array([960, 540])
+IMG_SIZE = np.array([1440, 810])
 DIST_COEFFS = np.zeros((4, 1))
 CAM_MATRIX = np.array([
     [1, 0, .5],
@@ -166,8 +167,7 @@ def gen_frames():
 
     while True:
         _, frame = cap.read()
-        h, w, *_ = frame.shape
-        yield cv2.resize(frame, (w//2, h//2))
+        yield cv2.resize(frame, tuple(IMG_SIZE))
 
 
 def gen_bboxs(frames: Iterable[np.ndarray]):
@@ -282,7 +282,11 @@ async def ws(websocket: WebSocket):
         frame = draw_pose_on_image(frame, pose)
         frame = draw_line(frame, s, e)
 
-        await websocket.send_bytes(cv2.imencode('.jpg', frame)[1].tobytes())
+        bytes = cv2.imencode('.jpg', frame)[1].tobytes()
+        b64 = base64.b64encode(bytes).decode('utf-8')
+        await websocket.send_json({
+            'img': b64,
+        })
 
 if __name__ == '__main__':
     uvicorn.run(app,  host="127.0.0.1", port=8000)

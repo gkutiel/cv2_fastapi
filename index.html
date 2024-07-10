@@ -30,16 +30,10 @@
     const ws = new WebSocket("ws://localhost:8000/ws");
 
     ws.onmessage = function (event) {
-        console.log(event.data);
-        vid.src = URL.createObjectURL(event.data)
+        const { img } = JSON.parse(event.data)
+        vid.src = `data:image/jpg;base64,${img}`
     };
 
-    function sendMessage(event) {
-        var input = document.getElementById("messageText")
-        ws.send(input.value)
-        input.value = ''
-        event.preventDefault()
-    }
 
 </script>
 
