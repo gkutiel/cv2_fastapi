@@ -36,7 +36,7 @@
     ws.onmessage = (event) => {
         const { img, crop } = JSON.parse(event.data)
         vid.src = `data:image/jpg;base64,${img}`
-        if (crop === null) {
+        if (!crop) {
             crop_img.src = 'https://theawesomedaily.com/wp-content/uploads/2017/05/funny-faces-101.jpeg'
         } else {
             crop_img.src = `data:image/jpg;base64,${crop}`
