@@ -352,6 +352,21 @@ def ears(fld: FaceLandmarkerResult | None):
         return 0, 0
 
 
+def yaw_pitch(vec: np.ndarray | None):
+    try:
+        assert vec is not None
+        print(vec)
+        vec = vec / norm(vec)
+
+        return (
+            np.arccos(vec @ np.array([1, 0, 0])) * 180 / np.pi - 90,
+            np.arccos(vec @ np.array([0, 1, 0])) * 180 / np.pi - 90)
+
+    except Exception:
+        traceback.print_exc()
+        return 0, 0
+
+
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     await websocket.accept()
@@ -383,12 +398,16 @@ async def ws(websocket: WebSocket):
         crop = draw_landmarks_on_image(crop, fld)
         crop = draw_head_pose(crop, head_pose, fld)
 
+        yaw, pitch = yaw_pitch(head_pose)
+
         ear_left, ear_right = ears(fld)
         print(ear_left, ear_right)
 
         await websocket.send_json({
             'img': encode_img(small_frame),
             'crop': encode_img(crop),
+            'yaw': f'{yaw:.2f}',
+            'pitch': f'{pitch:.2f}',
             'ear_left': f'{ear_left:.2f}',
             'ear_right': f'{ear_right:.2f}'})
 

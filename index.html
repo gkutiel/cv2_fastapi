@@ -14,11 +14,19 @@
             height: 100vh;
         }
 
+        .info {
+            display: flex;
+            flex-direction: column;
+            margin-bottom: 20px;
+            font-size: 2em;
+            width: 20em;
+            font-family: 'Courier New', Courier, monospace;
+        }
+
         #ears {
+            width: 100%;
             display: flex;
             justify-content: space-between;
-            width: 20em;
-            font-size: 2em;
         }
 
         #crop {
@@ -30,9 +38,14 @@
 
 <body>
     <div class="info">
+        <div id="head_pose">
+            <p id="yaw"></p>
+            <p id="pitch"></p>
+            <p id="roll"></p>
+        </div>
         <div id="ears">
-            <b id="left_ear"></b>
-            <b id="right_ear"></b>
+            <p id="left_ear"></p>
+            <p id="right_ear"></p>
         </div>
     </div>
     <img id='vid' />
@@ -44,15 +57,20 @@
 
     const vid = document.getElementById('vid')
     const crop_img = document.getElementById('crop')
+    const yaw_el = document.getElementById('yaw')
+    const pitch_el = document.getElementById('pitch')
     const left_ear_el = document.getElementById('left_ear')
     const right_ear_el = document.getElementById('right_ear')
 
 
     ws.onmessage = (event) => {
-        const { img, crop, ear_left, ear_right } = JSON.parse(event.data)
+        const { img, crop, ear_left, ear_right, yaw, pitch } = JSON.parse(event.data)
 
+        yaw_el.innerText = `Yaw: ${yaw}`
+        pitch_el.innerText = `Pitch: ${pitch}`
         left_ear_el.innerText = `Left ear: ${ear_left}`
         right_ear_el.innerText = `Right ear: ${ear_right}`
+
         vid.src = `data:image/jpg;base64,${img}`
         if (!crop) {
             crop_img.src = 'https://theawesomedaily.com/wp-content/uploads/2017/05/funny-faces-101.jpeg'
