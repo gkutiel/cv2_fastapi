@@ -272,7 +272,8 @@ def gen_head_poses(poses: Iterable[PoseLandmarkerResult | None]):
 
             lms = pose.pose_landmarks[0]
             lms = np.array([[lm.x, lm.y, lm.z] for lm in lms])
-            m = (lms[7] + lms[8]) / 2
+            idx = np.array([7, 8, 9, 10])
+            m = lms[idx].mean(axis=0)
             s = lms[0]
             yield cast(np.ndarray, s - m)
         except Exception:
