@@ -14,6 +14,13 @@
             height: 100vh;
         }
 
+        #ears {
+            display: flex;
+            justify-content: space-between;
+            width: 20em;
+            font-size: 2em;
+        }
+
         #crop {
             height: 300px;
             margin-top: 20px;
@@ -22,6 +29,12 @@
 </head>
 
 <body>
+    <div class="info">
+        <div id="ears">
+            <b id="left_ear"></b>
+            <b id="right_ear"></b>
+        </div>
+    </div>
     <img id='vid' />
     <img id='crop' />
 </body>
@@ -31,10 +44,15 @@
 
     const vid = document.getElementById('vid')
     const crop_img = document.getElementById('crop')
+    const left_ear_el = document.getElementById('left_ear')
+    const right_ear_el = document.getElementById('right_ear')
 
 
     ws.onmessage = (event) => {
-        const { img, crop } = JSON.parse(event.data)
+        const { img, crop, ear_left, ear_right } = JSON.parse(event.data)
+
+        left_ear_el.innerText = `Left ear: ${ear_left}`
+        right_ear_el.innerText = `Right ear: ${ear_right}`
         vid.src = `data:image/jpg;base64,${img}`
         if (!crop) {
             crop_img.src = 'https://theawesomedaily.com/wp-content/uploads/2017/05/funny-faces-101.jpeg'

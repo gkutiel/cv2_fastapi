@@ -16,6 +16,7 @@ from mediapipe.tasks.python.components.containers import (Landmark,
                                                           NormalizedLandmark)
 from mediapipe.tasks.python.vision.face_landmarker import FaceLandmarkerResult
 from mediapipe.tasks.python.vision.pose_landmarker import PoseLandmarkerResult
+from numpy.linalg import norm
 
 RunningMode = mp.tasks.vision.RunningMode
 FaceDetector = mp.tasks.vision.FaceDetector
@@ -318,6 +319,39 @@ def print_landmarks(landmarks: list[Landmark]):
         print(f' z: {landmark.z}')
 
 
+def encode_img(img: np.ndarray | None):
+    try:
+        assert img is not None
+        _, buffer = cv2.imencode('.jpg', img)
+        return base64.b64encode(buffer).decode()
+    except Exception:
+        return ''
+
+
+def ears(fld: FaceLandmarkerResult | None):
+    try:
+        assert fld is not None
+
+        # left right top bottom
+        le = np.array([362, 263, 386, 374])
+        re = np.array([33, 133, 159, 145])
+
+        lms = lms2array(fld.face_landmarks[0])
+
+        def ear(eye):
+            left, right, top, bottom = eye
+            h = norm(top - bottom)
+            w = norm(left - right)
+            print(h, w)
+            return h / w
+
+        return ear(lms[le]), ear(lms[re])
+
+    except Exception:
+        traceback.print_exc()
+        return 0, 0
+
+
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     await websocket.accept()
@@ -338,35 +372,25 @@ async def ws(websocket: WebSocket):
 
     flds = gen_flds(crops_fld)
 
-    for (
-        small_frame,
-        pose,
-        head_pose,
-        crop,
-        fld,
-    ) in zip(
-        small_frames,
-        poses,
-        head_poses,
-        crops,
-        flds,
-    ):
+    for small_frame, pose, head_pose, crop, fld in zip(
+            small_frames,
+            poses,
+            head_poses,
+            crops,
+            flds):
 
         small_frame = draw_pose_on_image(small_frame, pose)
         crop = draw_landmarks_on_image(crop, fld)
         crop = draw_head_pose(crop, head_pose, fld)
 
-        def encode_img(img: np.ndarray | None):
-            try:
-                assert img is not None
-                _, buffer = cv2.imencode('.jpg', img)
-                return base64.b64encode(buffer).decode()
-            except Exception:
-                return ''
+        ear_left, ear_right = ears(fld)
+        print(ear_left, ear_right)
 
         await websocket.send_json({
             'img': encode_img(small_frame),
-            'crop': encode_img(crop)})
+            'crop': encode_img(crop),
+            'ear_left': f'{ear_left:.2f}',
+            'ear_right': f'{ear_right:.2f}'})
 
 
 if __name__ == '__main__':
