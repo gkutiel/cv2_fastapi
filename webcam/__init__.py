@@ -72,24 +72,33 @@ def lms2array(lms: list[Landmark]):
     return np.array([[lm.x, lm.y, lm.z] for lm in lms])
 
 
-def norm2abs(point: np.ndarray):
+def norm2abs(frame: np.ndarray, point: np.ndarray):
     assert point.shape == (2,), point.shape
-    return (point * IMG_SIZE).astype(int)
+    return (point * frame.shape[:2]).astype(int)
 
 
-def draw_line(frame: np.ndarray, start: np.ndarray | None, end: np.ndarray | None):
+def draw_head_pose(crop: np.ndarray | None, dir: np.ndarray | None, fld: FaceLandmarkerResult | None):
     try:
-        assert start is not None and end is not None
-        assert start.shape == end.shape == (2,)
+        assert crop is not None
+        assert dir is not None
+        assert fld is not None
 
-        start = norm2abs(start)
-        end = norm2abs(end)
+        start = fld.face_landmarks[0][5]
+        start = np.array([start.x, start.y])
 
-        cv2.line(frame, tuple(start), tuple(end), (255, 0, 0), 2)
+        end = start + dir[:2] * 3
+
+        start = norm2abs(crop, start)
+        end = norm2abs(crop, end)
+
+        print(start, end)
+
+        cv2.line(crop, tuple(start), tuple(end), (255, 0, 0), 2)
     except Exception:
+        traceback.print_exc()
         pass
 
-    return frame
+    return crop
 
 
 def draw_bbox(frame: np.ndarray, bbox: BBox | None):
@@ -253,12 +262,11 @@ def gen_head_poses(poses: Iterable[PoseLandmarkerResult | None]):
             lms = np.array([[lm.x, lm.y, lm.z] for lm in lms])
             m = (lms[7] + lms[8]) / 2
             s = lms[0]
-            e = s + (s - m) * 2
-            yield s[:2], e[:2]
+            yield cast(np.ndarray, s - m)
         except Exception as e:
             if type(e) is not IndexError:
                 traceback.print_exc()
-            yield None, None
+            yield None
 
 
 def gen_flds(frames: Iterable[np.ndarray | None]):
@@ -307,7 +315,9 @@ async def ws(websocket: WebSocket):
     small_frames, small_frames_pose = tee(small_frames, 2)
 
     poses = gen_pose(small_frames_pose)
-    poses, poses_crop = tee(poses, 2)
+    poses, poses_crop, poses_pose = tee(poses, 3)
+
+    head_poses = gen_head_poses(poses_pose)
 
     crops = gen_crop_from_pose(frames_crop, poses_crop)
     crops, crops_fld = tee(crops, 2)
@@ -317,25 +327,20 @@ async def ws(websocket: WebSocket):
     for (
         small_frame,
         pose,
+        head_pose,
         crop,
         fld,
-        # bbox,
-        # fld,
-        # pose,
-        # (s, e)
     ) in zip(
         small_frames,
         poses,
+        head_poses,
         crops,
         flds,
-        # bboxs,
-        # poses,
-        # flds,
-        # head_poses
     ):
 
         small_frame = draw_pose_on_image(small_frame, pose)
         crop = draw_landmarks_on_image(crop, fld)
+        crop = draw_head_pose(crop, head_pose, fld)
 
         def encode_img(img: np.ndarray | None):
             if img is None:
