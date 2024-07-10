@@ -14,24 +14,33 @@
             height: 100vh;
         }
 
-        img {
-            max-height: 80vh;
+        #crop {
+            height: 300px;
+            margin-top: 20px;
         }
     </style>
 </head>
 
 <body>
-    <img id='vid' src="" alt="">
-    <ul id="messages"></ul>
+    <img id='vid' />
+    <img id='crop' />
 </body>
 
 <script>
-    const vid = document.getElementById('vid')
     const ws = new WebSocket("ws://localhost:8000/ws");
 
-    ws.onmessage = function (event) {
-        const { img } = JSON.parse(event.data)
+    const vid = document.getElementById('vid')
+    const crop_img = document.getElementById('crop')
+
+
+    ws.onmessage = (event) => {
+        const { img, crop } = JSON.parse(event.data)
         vid.src = `data:image/jpg;base64,${img}`
+        if (crop === null) {
+            crop_img.src = 'https://theawesomedaily.com/wp-content/uploads/2017/05/funny-faces-101.jpeg'
+        } else {
+            crop_img.src = `data:image/jpg;base64,${crop}`
+        }
     };
 
 

@@ -29,7 +29,7 @@ Landmarks = list[NormalizedLandmark]
 
 app = FastAPI(debug=True)
 
-IMG_SIZE = np.array([1440, 810])
+IMG_SIZE = np.array([640, 360])
 DIST_COEFFS = np.zeros((4, 1))
 CAM_MATRIX = np.array([
     [1, 0, .5],
@@ -66,6 +66,10 @@ class FLD:
     @classmethod
     def from_mp(cls, mp_fld: list[NormalizedLandmark]):
         return cls()
+
+
+def lms2array(lms: list[Landmark]):
+    return np.array([[lm.x, lm.y, lm.z] for lm in lms])
 
 
 def norm2abs(point: np.ndarray):
@@ -121,7 +125,7 @@ def draw_pose_on_image(img: np.ndarray, pose: PoseLandmarkerResult | None):
     return img
 
 
-def draw_landmarks_on_image(img: np.ndarray, fld: FaceLandmarkerResult | None):
+def draw_landmarks_on_image(img: np.ndarray | None, fld: FaceLandmarkerResult | None):
     try:
         assert fld is not None
 
@@ -167,27 +171,13 @@ def gen_frames():
 
     while True:
         _, frame = cap.read()
+        # print(frame.shape, frame.dtype)
+        yield frame
+
+
+def gen_small_frames(frames: Iterable[np.ndarray]):
+    for frame in frames:
         yield cv2.resize(frame, tuple(IMG_SIZE))
-
-
-def gen_bboxs(frames: Iterable[np.ndarray]):
-    face_detection_options = FaceDetectorOptions(
-        base_options=python.BaseOptions('detector.tflite'),
-        min_detection_confidence=0.5)
-
-    with FaceDetector.create_from_options(face_detection_options) as face_detector:
-        for frame in frames:
-            try:
-                img = mp.Image(
-                    image_format=ImageFormat.SRGB,
-                    data=frame)
-
-                faces = face_detector.detect(img).detections
-
-                face = faces[0]
-                yield BBox.from_mp(face.bounding_box)
-            except IndexError:
-                yield None
 
 
 def gen_pose(frames: Iterable[np.ndarray]):
@@ -209,6 +199,48 @@ def gen_pose(frames: Iterable[np.ndarray]):
                     pose_landmarker.detect(img))
 
             except Exception:
+                traceback.print_exc()
+                yield None
+
+
+def gen_crop_from_pose(frames: Iterable[np.ndarray], poses: Iterable[PoseLandmarkerResult | None]):
+    for frame, pose in zip(frames, poses):
+        try:
+            assert pose is not None
+
+            lms = pose.pose_landmarks[0]
+            lms = np.array([[lm.x, lm.y] for lm in lms[:10]])
+            h, w, _ = frame.shape
+            lms = (lms * [w, h]).astype(int)
+            x1, y1 = lms.min(axis=0)
+            x2, y2 = lms.max(axis=0)
+            h, w = y2 - y1, x2 - x1
+
+            yield frame[y1-h:y2+h, x1-w//2:x2+w//2, :].astype(np.uint8)
+
+        except Exception:
+            traceback.print_exc()
+            yield None
+
+
+def gen_bboxs(frames: Iterable[tuple[np.ndarray, PoseLandmarkerResult]]):
+    face_detection_options = FaceDetectorOptions(
+        base_options=python.BaseOptions('detector.tflite'),
+        min_detection_confidence=0.5)
+
+    with FaceDetector.create_from_options(face_detection_options) as face_detector:
+        for frame, pose in frames:
+            try:
+                lms = lms2array(pose.pose_landmarks[0])
+                img = mp.Image(
+                    image_format=ImageFormat.SRGB,
+                    data=frame)
+
+                faces = face_detector.detect(img).detections
+
+                face = faces[0]
+                yield BBox.from_mp(face.bounding_box)
+            except IndexError:
                 yield None
 
 
@@ -225,11 +257,11 @@ def gen_head_poses(poses: Iterable[PoseLandmarkerResult | None]):
             yield s[:2], e[:2]
         except Exception as e:
             if type(e) is not IndexError:
-                print(traceback.format_exc())
+                traceback.print_exc()
             yield None, None
 
 
-def gen_flds(frames: Iterable[np.ndarray]):
+def gen_flds(frames: Iterable[np.ndarray | None]):
     fld_options = FaceLandmarkerOptions(
         base_options=python.BaseOptions(
             'face_landmarker_v2_with_blendshapes.task'),
@@ -241,6 +273,8 @@ def gen_flds(frames: Iterable[np.ndarray]):
     with FaceLandmarker.create_from_options(fld_options) as face_landmarker:
         for frame in frames:
             try:
+                assert frame is not None
+
                 img = mp.Image(
                     image_format=ImageFormat.SRGB,
                     data=frame)
@@ -249,7 +283,8 @@ def gen_flds(frames: Iterable[np.ndarray]):
                     FaceLandmarkerResult,
                     face_landmarker.detect(img))
 
-            except IndexError:
+            except Exception:
+                traceback.print_exc()
                 yield None
 
 
@@ -266,27 +301,52 @@ async def ws(websocket: WebSocket):
     await websocket.accept()
 
     frames = gen_frames()
-    frames, frames_bbox, frames_fld, frames_pos = tee(frames, 4)
+    frames_crop, frames_small = tee(frames, 2)
 
-    bboxs = gen_bboxs(frames_bbox)
-    flds = gen_flds(frames_fld)
+    small_frames = gen_small_frames(frames_small)
+    small_frames, small_frames_pose = tee(small_frames, 2)
 
-    poses = gen_pose(frames_pos)
-    poses, poses_head = tee(poses, 2)
+    poses = gen_pose(small_frames_pose)
+    poses, poses_crop = tee(poses, 2)
 
-    head_poses = gen_head_poses(poses_head)
+    crops = gen_crop_from_pose(frames_crop, poses_crop)
+    crops, crops_fld = tee(crops, 2)
 
-    for frame, bbox, fld, pose, (s, e) in zip(frames, bboxs, flds, poses, head_poses):
-        frame = draw_bbox(frame, bbox)
-        frame = draw_landmarks_on_image(frame, fld)
-        frame = draw_pose_on_image(frame, pose)
-        frame = draw_line(frame, s, e)
+    flds = gen_flds(crops_fld)
 
-        bytes = cv2.imencode('.jpg', frame)[1].tobytes()
-        b64 = base64.b64encode(bytes).decode('utf-8')
+    for (
+        small_frame,
+        pose,
+        crop,
+        fld,
+        # bbox,
+        # fld,
+        # pose,
+        # (s, e)
+    ) in zip(
+        small_frames,
+        poses,
+        crops,
+        flds,
+        # bboxs,
+        # poses,
+        # flds,
+        # head_poses
+    ):
+
+        small_frame = draw_pose_on_image(small_frame, pose)
+        crop = draw_landmarks_on_image(crop, fld)
+
+        def encode_img(img: np.ndarray | None):
+            if img is None:
+                return ''
+
+            _, buffer = cv2.imencode('.jpg', img)
+            return base64.b64encode(buffer).decode()
+
         await websocket.send_json({
-            'img': b64,
-        })
+            'img': encode_img(small_frame),
+            'crop': encode_img(crop)})
 
 if __name__ == '__main__':
     uvicorn.run(app,  host="127.0.0.1", port=8000)
