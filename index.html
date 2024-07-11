@@ -49,6 +49,12 @@
                 <th>Z</th>
             </tr>
             <tr>
+                <td>Translation</td>
+                <td id="trans_x"></td>
+                <td id="trans_y"></td>
+                <td id="trans_z"></td>
+            </tr>
+            <tr>
                 <td>Rotation</td>
                 <td id="rot_x"></td>
                 <td id="rot_y"></td>
@@ -63,33 +69,40 @@
 </body>
 
 <script>
+    function set(id, val) {
+        try {
+            document.getElementById(id).innerText = val
+        }
+        catch (e) {
+            console.error(e)
+        }
+    }
+
     const ws = new WebSocket("ws://localhost:8000/ws");
 
-    const vid = document.getElementById('vid')
-    const crop_img = document.getElementById('crop')
-    const rot_x_el = document.getElementById('rot_x')
-    const rot_y_el = document.getElementById('rot_y')
-    const rot_z_el = document.getElementById('rot_z')
-    const left_ear_el = document.getElementById('left_ear')
-    const right_ear_el = document.getElementById('right_ear')
-
-
     ws.onmessage = (event) => {
+        const vid = document.getElementById('vid')
+        const crop_el = document.getElementById('crop')
         const { img, crop, ear_left, ear_right, trans, rot } = JSON.parse(event.data)
-
-        const [rot_x, rot_y, rot_z] = rot
-        rot_x_el.innerText = rot_x
-        rot_y_el.innerText = rot_y
-        rot_z_el.innerText = rot_z
-        left_ear_el.innerText = `Left ear: ${ear_left}`
-        right_ear_el.innerText = `Right ear: ${ear_right}`
 
         vid.src = `data:image/jpg;base64,${img}`
         if (!crop) {
-            crop_img.src = 'https://theawesomedaily.com/wp-content/uploads/2017/05/funny-faces-101.jpeg'
+            crop_el.src = 'https://theawesomedaily.com/wp-content/uploads/2017/05/funny-faces-101.jpeg'
         } else {
-            crop_img.src = `data:image/jpg;base64,${crop}`
+            crop_el.src = `data:image/jpg;base64,${crop}`
         }
+
+        const [trans_x, trans_y, trans_z] = trans
+        set('trans_x', trans_x)
+        set('trans_y', trans_y)
+        set('trans_z', trans_z)
+
+        const [rot_x, rot_y, rot_z] = rot
+        set('rot_x', `${rot_x}°`)
+        set('rot_y', `${rot_y}°`)
+        set('rot_z', `${rot_z}°`)
+        set('left_ear', ear_left)
+        set('right_ear', ear_right)
     };
 
 
