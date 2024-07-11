@@ -37,19 +37,29 @@
 </head>
 
 <body>
+    <img id='vid' />
+    <img id='crop' />
     <div class="info">
-        <div id="head_pose">
-            <p id="yaw"></p>
-            <p id="pitch"></p>
-            <p id="roll"></p>
-        </div>
+        <h2>Transformation</h2>
+        <table>
+            <tr>
+                <th></th>
+                <th>X</th>
+                <th>Y</th>
+                <th>Z</th>
+            </tr>
+            <tr>
+                <td>Rotation</td>
+                <td id="rot_x"></td>
+                <td id="rot_y"></td>
+                <td id="rot_z"></td>
+            </tr>
+        </table>
         <div id="ears">
             <p id="left_ear"></p>
             <p id="right_ear"></p>
         </div>
     </div>
-    <img id='vid' />
-    <img id='crop' />
 </body>
 
 <script>
@@ -57,17 +67,20 @@
 
     const vid = document.getElementById('vid')
     const crop_img = document.getElementById('crop')
-    const yaw_el = document.getElementById('yaw')
-    const pitch_el = document.getElementById('pitch')
+    const rot_x_el = document.getElementById('rot_x')
+    const rot_y_el = document.getElementById('rot_y')
+    const rot_z_el = document.getElementById('rot_z')
     const left_ear_el = document.getElementById('left_ear')
     const right_ear_el = document.getElementById('right_ear')
 
 
     ws.onmessage = (event) => {
-        const { img, crop, ear_left, ear_right, yaw, pitch } = JSON.parse(event.data)
+        const { img, crop, ear_left, ear_right, trans, rot } = JSON.parse(event.data)
 
-        yaw_el.innerText = `Yaw: ${yaw}`
-        pitch_el.innerText = `Pitch: ${pitch}`
+        const [rot_x, rot_y, rot_z] = rot
+        rot_x_el.innerText = rot_x
+        rot_y_el.innerText = rot_y
+        rot_z_el.innerText = rot_z
         left_ear_el.innerText = `Left ear: ${ear_left}`
         right_ear_el.innerText = `Right ear: ${ear_right}`
 

@@ -7,6 +7,7 @@ from typing import Iterable, cast
 import cv2
 import mediapipe as mp
 import numpy as np
+import transforms3d.affines as affines
 import uvicorn
 from fastapi import FastAPI, WebSocket
 from mediapipe import solutions
@@ -17,6 +18,7 @@ from mediapipe.tasks.python.components.containers import (Landmark,
 from mediapipe.tasks.python.vision.face_landmarker import FaceLandmarkerResult
 from mediapipe.tasks.python.vision.pose_landmarker import PoseLandmarkerResult
 from numpy.linalg import norm
+from scipy.spatial.transform import Rotation
 
 RunningMode = mp.tasks.vision.RunningMode
 FaceDetector = mp.tasks.vision.FaceDetector
@@ -59,8 +61,13 @@ def gen_bboxs(frames: Iterable[tuple[np.ndarray, PoseLandmarkerResult]]):
                 yield None
 
 
-# POS_VEC = np.array([0, 0, 2])
-# face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
+def encode_img(img: np.ndarray | None):
+    try:
+        assert img is not None
+        _, buffer = cv2.imencode('.jpg', img)
+        return base64.b64encode(buffer).decode()
+    except Exception:
+        return ''
 
 
 @dataclass
@@ -256,27 +263,12 @@ def gen_crop_from_pose(frames: Iterable[np.ndarray | None], poses: Iterable[Pose
             x1, y1 = lms.min(axis=0)
             x2, y2 = lms.max(axis=0)
             h, w = y2 - y1, x2 - x1
+            h = int(h * 2)
             h = max(128, h)
             w = max(128, w)
 
             yield frame[y1-h:y2+h, x1-w//2:x2+w//2, :].astype(np.uint8)
 
-        except Exception:
-            traceback.print_exc()
-            yield None
-
-
-def gen_head_poses(poses: Iterable[PoseLandmarkerResult | None]):
-    for pose in poses:
-        try:
-            assert pose is not None
-
-            lms = pose.pose_landmarks[0]
-            lms = np.array([[lm.x, lm.y, lm.z] for lm in lms])
-            idx = np.array([7, 8, 9, 10])
-            m = lms[idx].mean(axis=0)
-            s = lms[0]
-            yield cast(np.ndarray, s - m)
         except Exception:
             traceback.print_exc()
             yield None
@@ -288,7 +280,7 @@ def gen_flds(crops: Iterable[np.ndarray | None]):
             'face_landmarker_v2_with_blendshapes.task'),
         running_mode=RunningMode.IMAGE,
         output_face_blendshapes=False,
-        output_facial_transformation_matrixes=False,
+        output_facial_transformation_matrixes=True,
         num_faces=1)
 
     with FaceLandmarker.create_from_options(fld_options) as face_landmarker:
@@ -306,26 +298,23 @@ def gen_flds(crops: Iterable[np.ndarray | None]):
                     face_landmarker.detect(img))
 
             except Exception:
-                print('FLD')
                 traceback.print_exc()
                 yield None
 
 
-def print_landmarks(landmarks: list[Landmark]):
-    for i, landmark in enumerate(landmarks):
-        print(f'Landmark {i}:')
-        print(f' x: {landmark.x}')
-        print(f' y: {landmark.y}')
-        print(f' z: {landmark.z}')
+def gen_trans_rot(flds: Iterable[FaceLandmarkerResult | None]):
+    for fld in flds:
+        try:
+            assert fld is not None
 
+            tmat = fld.facial_transformation_matrixes[0]
+            trans, rot, *_ = affines.decompose(tmat)
+            rot = Rotation.from_matrix(rot).as_euler('xyz', degrees=True)
+            yield trans, rot
 
-def encode_img(img: np.ndarray | None):
-    try:
-        assert img is not None
-        _, buffer = cv2.imencode('.jpg', img)
-        return base64.b64encode(buffer).decode()
-    except Exception:
-        return ''
+        except Exception:
+            traceback.print_exc()
+            yield np.zeros(3), np.zeros(3)
 
 
 def ears(fld: FaceLandmarkerResult | None):
@@ -342,25 +331,9 @@ def ears(fld: FaceLandmarkerResult | None):
             left, right, top, bottom = eye
             h = norm(top - bottom)
             w = norm(left - right)
-            print(h, w)
             return h / w
 
         return ear(lms[le]), ear(lms[re])
-
-    except Exception:
-        traceback.print_exc()
-        return 0, 0
-
-
-def yaw_pitch(vec: np.ndarray | None):
-    try:
-        assert vec is not None
-        print(vec)
-        vec = vec / norm(vec)
-
-        return (
-            np.arccos(vec @ np.array([1, 0, 0])) * 180 / np.pi - 90,
-            np.arccos(vec @ np.array([0, 1, 0])) * 180 / np.pi - 90)
 
     except Exception:
         traceback.print_exc()
@@ -378,36 +351,37 @@ async def ws(websocket: WebSocket):
     small_frames, small_frames_pose = tee(small_frames, 2)
 
     poses = gen_pose(small_frames_pose)
-    poses, poses_crop, poses_pose = tee(poses, 3)
-
-    head_poses = gen_head_poses(poses_pose)
+    poses, poses_crop = tee(poses, 2)
 
     crops = gen_crop_from_pose(frames_crop, poses_crop)
     crops, crops_fld = tee(crops, 2)
 
     flds = gen_flds(crops_fld)
+    flds, flds_tmat = tee(flds, 2)
 
-    for small_frame, pose, head_pose, crop, fld in zip(
+    trans_rot = gen_trans_rot(flds_tmat)
+
+    for small_frame, pose, crop, fld, trans_rot in zip(
             small_frames,
             poses,
-            head_poses,
             crops,
-            flds):
+            flds,
+            trans_rot):
 
         small_frame = draw_pose_on_image(small_frame, pose)
         crop = draw_landmarks_on_image(crop, fld)
-        crop = draw_head_pose(crop, head_pose, fld)
+        # crop = draw_head_pose(crop, head_pose, fld)
 
-        yaw, pitch = yaw_pitch(head_pose)
+        # yaw, pitch = yaw_pitch(head_pose)
 
         ear_left, ear_right = ears(fld)
-        print(ear_left, ear_right)
+        trans, rot = trans_rot
 
         await websocket.send_json({
             'img': encode_img(small_frame),
             'crop': encode_img(crop),
-            'yaw': f'{yaw:.2f}',
-            'pitch': f'{pitch:.2f}',
+            'trans': np.round(trans, 2).tolist(),
+            'rot': np.round(rot, 2).tolist(),
             'ear_left': f'{ear_left:.2f}',
             'ear_right': f'{ear_right:.2f}'})
 
