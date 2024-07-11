@@ -15,6 +15,7 @@ from mediapipe.framework.formats import landmark_pb2
 from mediapipe.tasks import python
 from mediapipe.tasks.python.components.containers import (Landmark,
                                                           NormalizedLandmark)
+from mediapipe.tasks.python.vision.face_detector import FaceDetectorResult
 from mediapipe.tasks.python.vision.face_landmarker import FaceLandmarkerResult
 from mediapipe.tasks.python.vision.pose_landmarker import PoseLandmarkerResult
 from numpy.linalg import norm
@@ -38,27 +39,6 @@ CAM_MATRIX = np.array([
     [1, 0, .5],
     [0, 1, .5],
     [0, 0, 1]])
-
-
-def gen_bboxs(frames: Iterable[tuple[np.ndarray, PoseLandmarkerResult]]):
-    face_detection_options = FaceDetectorOptions(
-        base_options=python.BaseOptions('detector.tflite'),
-        min_detection_confidence=0.5)
-
-    with FaceDetector.create_from_options(face_detection_options) as face_detector:
-        for frame, pose in frames:
-            try:
-                lms = lms2array(pose.pose_landmarks[0])
-                img = mp.Image(
-                    image_format=ImageFormat.SRGB,
-                    data=frame)
-
-                faces = face_detector.detect(img).detections
-
-                face = faces[0]
-                yield BBox.from_mp(face.bounding_box)
-            except IndexError:
-                yield None
 
 
 def encode_img(img: np.ndarray | None):
@@ -124,7 +104,6 @@ def draw_head_pose(crop: np.ndarray | None, dir: np.ndarray | None, fld: FaceLan
         cv2.line(crop, tuple(start), tuple(end), (255, 0, 0), 2)
     except Exception:
         traceback.print_exc()
-        pass
 
     return crop
 
@@ -224,6 +203,28 @@ def gen_small_frames(frames: Iterable[np.ndarray | None]):
             yield None
 
 
+def gen_faces(frames: Iterable[np.ndarray | None]):
+    face_detection_options = FaceDetectorOptions(
+        base_options=python.BaseOptions('detector.tflite'),
+        min_detection_confidence=0.5)
+
+    with FaceDetector.create_from_options(face_detection_options) as face_detector:
+        for frame in frames:
+            try:
+                assert frame is not None
+
+                img = mp.Image(
+                    image_format=ImageFormat.SRGB,
+                    data=frame)
+
+                yield cast(
+                    FaceDetectorResult,
+                    face_detector.detect(img))
+            except Exception:
+                traceback.print_exc()
+                yield None
+
+
 def gen_pose(frames: Iterable[np.ndarray | None]):
     base_options = python.BaseOptions(model_asset_path='pose_landmarker.task')
     options = PoseLandmarkerOptions(
@@ -279,9 +280,9 @@ def gen_trans(poses: Iterable[PoseLandmarkerResult | None]):
         try:
             assert pose is not None
 
+            # lms = lms2array(pose.pose_world_landmarks[0])
             lms = lms2array(pose.pose_landmarks[0])
-            lms = lms[:11]
-            yield lms.mean(axis=0)
+            yield lms[0]
         except Exception:
             traceback.print_exc()
             yield np.zeros(3)
@@ -361,7 +362,9 @@ async def ws(websocket: WebSocket):
     frames_crop, frames_small = tee(frames, 2)
 
     small_frames = gen_small_frames(frames_small)
-    small_frames, small_frames_pose = tee(small_frames, 2)
+    small_frames, small_frames_pose, small_frames_faces = tee(small_frames, 3)
+
+    faces = gen_faces(small_frames_faces)
 
     poses = gen_pose(small_frames_pose)
     poses, poses_crop, poses_trans = tee(poses, 3)
@@ -376,14 +379,23 @@ async def ws(websocket: WebSocket):
 
     rots = gen_rots(flds_rots)
 
-    for small_frame, pose, crop, fld, trans, rots in zip(
+    for (
+        small_frame,
+        face,
+        pose,
+        crop,
+        fld,
+        trans,
+        rots) in zip(
             small_frames,
+            faces,
             poses,
             crops,
             flds,
             trans,
             rots):
 
+        print('FACE', face)
         small_frame = draw_pose_on_image(small_frame, pose)
         crop = draw_landmarks_on_image(crop, fld)
         # crop = draw_head_pose(crop, head_pose, fld)
