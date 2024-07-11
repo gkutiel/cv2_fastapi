@@ -274,6 +274,19 @@ def gen_crop_from_pose(frames: Iterable[np.ndarray | None], poses: Iterable[Pose
             yield None
 
 
+def gen_trans(poses: Iterable[PoseLandmarkerResult | None]):
+    for pose in poses:
+        try:
+            assert pose is not None
+
+            lms = lms2array(pose.pose_landmarks[0])
+            lms = lms[:11]
+            yield lms.mean(axis=0)
+        except Exception:
+            traceback.print_exc()
+            yield np.zeros(3)
+
+
 def gen_flds(crops: Iterable[np.ndarray | None]):
     fld_options = FaceLandmarkerOptions(
         base_options=python.BaseOptions(
@@ -302,19 +315,19 @@ def gen_flds(crops: Iterable[np.ndarray | None]):
                 yield None
 
 
-def gen_trans_rot(flds: Iterable[FaceLandmarkerResult | None]):
+def gen_rots(flds: Iterable[FaceLandmarkerResult | None]):
     for fld in flds:
         try:
             assert fld is not None
 
             tmat = fld.facial_transformation_matrixes[0]
-            trans, rot, *_ = affines.decompose(tmat)
+            _, rot, *_ = affines.decompose(tmat)
             rot = Rotation.from_matrix(rot).as_euler('xyz', degrees=True)
-            yield trans, rot
+            yield rot
 
         except Exception:
             traceback.print_exc()
-            yield np.zeros(3), np.zeros(3)
+            yield np.zeros(3)
 
 
 def ears(fld: FaceLandmarkerResult | None):
@@ -351,22 +364,25 @@ async def ws(websocket: WebSocket):
     small_frames, small_frames_pose = tee(small_frames, 2)
 
     poses = gen_pose(small_frames_pose)
-    poses, poses_crop = tee(poses, 2)
+    poses, poses_crop, poses_trans = tee(poses, 3)
+
+    trans = gen_trans(poses_trans)
 
     crops = gen_crop_from_pose(frames_crop, poses_crop)
     crops, crops_fld = tee(crops, 2)
 
     flds = gen_flds(crops_fld)
-    flds, flds_tmat = tee(flds, 2)
+    flds, flds_rots = tee(flds, 2)
 
-    trans_rot = gen_trans_rot(flds_tmat)
+    rots = gen_rots(flds_rots)
 
-    for small_frame, pose, crop, fld, trans_rot in zip(
+    for small_frame, pose, crop, fld, trans, rots in zip(
             small_frames,
             poses,
             crops,
             flds,
-            trans_rot):
+            trans,
+            rots):
 
         small_frame = draw_pose_on_image(small_frame, pose)
         crop = draw_landmarks_on_image(crop, fld)
@@ -375,13 +391,12 @@ async def ws(websocket: WebSocket):
         # yaw, pitch = yaw_pitch(head_pose)
 
         ear_left, ear_right = ears(fld)
-        trans, rot = trans_rot
 
         await websocket.send_json({
             'img': encode_img(small_frame),
             'crop': encode_img(crop),
             'trans': np.round(trans, 2).tolist(),
-            'rot': np.round(rot, 2).tolist(),
+            'rot': np.round(rots, 2).tolist(),
             'ear_left': f'{ear_left:.2f}',
             'ear_right': f'{ear_right:.2f}'})
 
