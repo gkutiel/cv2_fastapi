@@ -9,6 +9,7 @@ import mediapipe as mp
 import numpy as np
 import transforms3d.affines as affines
 import uvicorn
+from cattrs import unstructure
 from fastapi import FastAPI, WebSocket
 from mediapipe import solutions
 from mediapipe.framework.formats import landmark_pb2
@@ -359,6 +360,16 @@ def ears(fld: FaceLandmarkerResult | None):
         return 0, 0
 
 
+@dataclass(kw_only=True)
+class Msg:
+    frame_src: str
+    face_src: str
+    trans: list
+    rot: list
+    ear_left: str
+    ear_right: str
+
+
 @app.websocket("/ws")
 async def ws(websocket: WebSocket):
     await websocket.accept()
@@ -412,23 +423,30 @@ async def ws(websocket: WebSocket):
 
             ear_left, ear_right = ears(fld)
 
-            await websocket.send_json({
-                'frame_src': encode_img(small_frame),
-                'face_src': encode_img(crop),
-                'trans': np.round(trans, 2).tolist(),
-                'rot': np.round(rots, 2).tolist(),
-                'ear_left': f'{ear_left:.2f}',
-                'ear_right': f'{ear_right:.2f}'})
+            msg = Msg(
+                frame_src=encode_img(small_frame),
+                face_src=encode_img(crop),
+                ear_left=f'{ear_left:.2f}',
+                ear_right=f'{ear_right:.2f}',
+                trans=np.round(trans, 2).tolist(),
+                rot=np.round(rots, 2).tolist())
+
+            msg = unstructure(msg)
+
+            ear_left = await websocket.send_json(msg)
 
         except Exception:
             traceback.print_exc()
-            await websocket.send_json({
-                'img': encode_img(small_frame),
-                'crop': encode_img(small_frame),
-                'trans': [],
-                'rot': [],
-                'ear_left': 0,
-                'ear_right': 0})
+            msg = Msg(
+                frame_src=encode_img(small_frame),
+                face_src=encode_img(np.zeros((1, 1, 3), dtype=np.uint8)),
+                ear_left='-',
+                ear_right='-',
+                trans=[],
+                rot=[])
+
+            msg = unstructure(msg)
+            await websocket.send_json(msg)
 
 
 if __name__ == '__main__':
