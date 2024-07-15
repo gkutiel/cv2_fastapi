@@ -264,13 +264,18 @@ def gen_crop_from_pose(frames: Iterable[np.ndarray | None], poses: Iterable[Pose
             x1, y1 = lms.min(axis=0)
             x2, y2 = lms.max(axis=0)
             h, w = y2 - y1, x2 - x1
-            h = int(h * 2)
-            h = max(128, h)
-            w = max(128, w)
 
-            yield frame[y1-h:y2+h, x1-w//2:x2+w//2, :].astype(np.uint8)
+            crop = frame = frame[y1-h:y2+h, x1 -
+                                 w//2:x2+w//2, :].astype(np.uint8)
+            h, w, _ = crop.shape
+            d = max(h, w)
+            pad = np.ones((d, d, 3), dtype=np.uint8)
+            pad[:h, :w] = crop
+
+            yield pad
 
         except Exception:
+            print('CROP ERROR')
             traceback.print_exc()
             yield None
 
@@ -323,7 +328,6 @@ def gen_rots(flds: Iterable[FaceLandmarkerResult | None]):
 
             tmat = fld.facial_transformation_matrixes[0]
             trans, rot, *_ = affines.decompose(tmat)
-            print('TRANS', trans)
             rot = Rotation.from_matrix(rot).as_euler('xyz', degrees=True)
             yield rot
 
@@ -409,8 +413,8 @@ async def ws(websocket: WebSocket):
             ear_left, ear_right = ears(fld)
 
             await websocket.send_json({
-                'img': encode_img(small_frame),
-                'crop': encode_img(crop),
+                'frame_src': encode_img(small_frame),
+                'face_src': encode_img(crop),
                 'trans': np.round(trans, 2).tolist(),
                 'rot': np.round(rots, 2).tolist(),
                 'ear_left': f'{ear_left:.2f}',
