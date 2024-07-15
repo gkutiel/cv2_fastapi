@@ -187,7 +187,7 @@ def gen_frames():
     while True:
         try:
             _, frame = cap.read()
-            yield frame
+            yield cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         except Exception:
             traceback.print_exc()
             yield None
@@ -322,7 +322,8 @@ def gen_rots(flds: Iterable[FaceLandmarkerResult | None]):
             assert fld is not None
 
             tmat = fld.facial_transformation_matrixes[0]
-            _, rot, *_ = affines.decompose(tmat)
+            trans, rot, *_ = affines.decompose(tmat)
+            print('TRANS', trans)
             rot = Rotation.from_matrix(rot).as_euler('xyz', degrees=True)
             yield rot
 
@@ -395,22 +396,27 @@ async def ws(websocket: WebSocket):
             trans,
             rots):
 
-        print('FACE', face)
-        small_frame = draw_pose_on_image(small_frame, pose)
-        crop = draw_landmarks_on_image(crop, fld)
-        # crop = draw_head_pose(crop, head_pose, fld)
+        try:
+            small_frame = cv2.cvtColor(small_frame, cv2.COLOR_RGB2BGR)
+            crop = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
 
-        # yaw, pitch = yaw_pitch(head_pose)
+            small_frame = draw_pose_on_image(small_frame, pose)
+            crop = draw_landmarks_on_image(crop, fld)
+            # crop = draw_head_pose(crop, head_pose, fld)
 
-        ear_left, ear_right = ears(fld)
+            # yaw, pitch = yaw_pitch(head_pose)
 
-        await websocket.send_json({
-            'img': encode_img(small_frame),
-            'crop': encode_img(crop),
-            'trans': np.round(trans, 2).tolist(),
-            'rot': np.round(rots, 2).tolist(),
-            'ear_left': f'{ear_left:.2f}',
-            'ear_right': f'{ear_right:.2f}'})
+            ear_left, ear_right = ears(fld)
+
+            await websocket.send_json({
+                'img': encode_img(small_frame),
+                'crop': encode_img(crop),
+                'trans': np.round(trans, 2).tolist(),
+                'rot': np.round(rots, 2).tolist(),
+                'ear_left': f'{ear_left:.2f}',
+                'ear_right': f'{ear_right:.2f}'})
+        except Exception:
+            traceback.print_exc()
 
 
 if __name__ == '__main__':
