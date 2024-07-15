@@ -141,6 +141,22 @@ def draw_pose_on_image(img: np.ndarray | None, pose: PoseLandmarkerResult | None
     return img
 
 
+def draw_landmarks_2d(img: np.ndarray | None, lms: np.ndarray):
+    try:
+        assert img is not None
+        assert lms.shape[1] == 2
+
+        h, w, _ = img.shape
+        for x, y in lms:
+            x, y = int(x * w), int(y * h)
+            cv2.circle(img, (x, y), 1, (255, 0, 0), -1)
+
+    except Exception:
+        pass
+
+    return img
+
+
 def draw_landmarks_on_image(img: np.ndarray | None, fld: FaceLandmarkerResult | None):
     try:
         assert fld is not None
@@ -266,11 +282,13 @@ def gen_crop_from_pose(frames: Iterable[np.ndarray | None], poses: Iterable[Pose
             x2, y2 = lms.max(axis=0)
             h, w = y2 - y1, x2 - x1
 
-            crop = frame = frame[y1-h:y2+h, x1 -
-                                 w//2:x2+w//2, :].astype(np.uint8)
+            crop = frame = frame[
+                y1-h:y2+h,
+                x1-w//2:x2+w//2, :].astype(np.uint8)
+
             h, w, _ = crop.shape
             d = max(h, w)
-            pad = np.ones((d, d, 3), dtype=np.uint8)
+            pad = np.ones((d, d, 3), dtype=np.uint8) * 255
             pad[:h, :w] = crop
 
             yield pad
@@ -322,15 +340,35 @@ def gen_flds(crops: Iterable[np.ndarray | None]):
                 yield None
 
 
-def gen_rots(flds: Iterable[FaceLandmarkerResult | None]):
+def gen_norm_flds_2d(flds: Iterable[FaceLandmarkerResult | None]):
     for fld in flds:
         try:
             assert fld is not None
 
             tmat = fld.facial_transformation_matrixes[0]
-            trans, rot, *_ = affines.decompose(tmat)
-            rot = Rotation.from_matrix(rot).as_euler('xyz', degrees=True)
-            yield rot
+
+            T, R, *_ = affines.decompose(tmat)
+            print('T', T)
+            # rot = Rotation.from_matrix(rot).as_euler('xyz', degrees=False)
+            R_inv = np.linalg.inv(R)
+
+            # print('ROT', rot.shape)
+            # yield rot
+
+            lms = fld.face_landmarks[0]
+            lms = lms2array(fld.face_landmarks[0])
+            # lms = lms * 30
+            print('LMS', lms[0])
+
+            # tmat_inv = np.linalg.inv(tmat)
+            # lms = np.hstack([lms, np.ones((lms.shape[0], 1))])
+            # lms_norm = (R_inv @ lms.T).T - (R_inv @ T)
+            lms_norm = (R @ lms.T).T
+            # lms_norm = (R @ lms.T).T + T
+            # lms_norm = lms_norm / 30
+
+            print('LMS_NORM', lms_norm[0])
+            yield lms_norm[:, :2]
 
         except Exception:
             traceback.print_exc()
@@ -391,9 +429,10 @@ async def ws(websocket: WebSocket):
     crops, crops_fld = tee(crops, 2)
 
     flds = gen_flds(crops_fld)
-    flds, flds_rots = tee(flds, 2)
+    flds, flds_norm = tee(flds, 2)
 
-    rots = gen_rots(flds_rots)
+    norm_flds = gen_norm_flds_2d(flds_norm)
+    # rots = gen_rots(flds_rots)
 
     for (
         small_frame,
@@ -402,14 +441,15 @@ async def ws(websocket: WebSocket):
         crop,
         fld,
         trans,
-        rots) in zip(
+        norm_fld
+    ) in zip(
             small_frames,
             faces,
             poses,
             crops,
             flds,
             trans,
-            rots):
+            norm_flds):
 
         try:
             small_frame = cv2.cvtColor(small_frame, cv2.COLOR_RGB2BGR)
@@ -417,6 +457,7 @@ async def ws(websocket: WebSocket):
 
             small_frame = draw_pose_on_image(small_frame, pose)
             crop = draw_landmarks_on_image(crop, fld)
+            crop = draw_landmarks_2d(crop, norm_fld)
             # crop = draw_head_pose(crop, head_pose, fld)
 
             # yaw, pitch = yaw_pitch(head_pose)
@@ -429,7 +470,9 @@ async def ws(websocket: WebSocket):
                 ear_left=f'{ear_left:.2f}',
                 ear_right=f'{ear_right:.2f}',
                 trans=np.round(trans, 2).tolist(),
-                rot=np.round(rots, 2).tolist())
+                rot=[]
+                # rot=np.round(rots, 2).tolist()
+            )
 
             msg = unstructure(msg)
 
