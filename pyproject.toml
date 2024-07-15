@@ -14,6 +14,7 @@ mediapipe = "^0.10.14"
 scipy = "^1.14.0"
 transforms3d = "^0.4.2"
 cattrs = "^23.2.3"
+trimesh = "^4.4.3"
 
 
 [tool.poetry.group.dev.dependencies]

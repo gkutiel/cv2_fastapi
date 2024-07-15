@@ -1684,6 +1684,27 @@ files = [
 numpy = ">=1.15"
 
 [[package]]
+name = "trimesh"
+version = "4.4.3"
+description = "Import, export, process, analyze and view triangular meshes."
+optional = false
+python-versions = ">=3.8"
+files = [
+    {file = "trimesh-4.4.3-py3-none-any.whl", hash = "sha256:77dc3963ec3e4f560b37a66f8dd9132eee9f333d04837d2b0688ea12f05c099a"},
+    {file = "trimesh-4.4.3.tar.gz", hash = "sha256:a4110ad6832d23ccf4df32872a3804eeea216421352913d1514ed9dad2001d5e"},
+]
+
+[package.dependencies]
+numpy = ">=1.20"
+
+[package.extras]
+all = ["trimesh[deprecated,easy,recommend,test]"]
+deprecated = ["gmsh (==4.12.2)"]
+easy = ["chardet", "colorlog", "embreex", "httpx", "jsonschema", "lxml", "manifold3d (>=2.3.0)", "networkx", "pillow", "pycollada", "rtree", "scipy", "setuptools", "shapely", "svg.path", "vhacdx", "xatlas", "xxhash"]
+recommend = ["cascadio", "glooey", "mapbox-earcut", "meshio", "openctm", "psutil", "pyglet (<2)", "python-fcl", "scikit-image", "sympy"]
+test = ["coveralls", "ezdxf", "matplotlib", "pyinstrument", "pyright", "pytest", "pytest-beartype", "pytest-cov", "ruff"]
+
+[[package]]
 name = "typer"
 version = "0.12.3"
 description = "Typer, build great CLIs. Easy to code. Based on Python type hints."
@@ -2038,4 +2059,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.12"
-content-hash = "e0233792b1dd19f15a002e4738c352b2cfc1d51e0ef0526206da8207e5779b43"
+content-hash = "e59e10f0b8d0f589ffbb3699ef5df0cd0d193390c88a10a4efb5e5d867194d7f"

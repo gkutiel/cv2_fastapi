@@ -8,6 +8,7 @@ import cv2
 import mediapipe as mp
 import numpy as np
 import transforms3d.affines as affines
+import trimesh
 import uvicorn
 from cattrs import unstructure
 from fastapi import FastAPI, WebSocket
@@ -149,7 +150,7 @@ def draw_landmarks_2d(img: np.ndarray | None, lms: np.ndarray):
         h, w, _ = img.shape
         for x, y in lms:
             x, y = int(x * w), int(y * h)
-            cv2.circle(img, (x, y), 1, (255, 0, 0), -1)
+            cv2.circle(img, (x, y), 2, (255, 0, 0), -1)
 
     except Exception:
         pass
@@ -357,7 +358,7 @@ def gen_norm_flds_2d(flds: Iterable[FaceLandmarkerResult | None]):
 
             lms = fld.face_landmarks[0]
             lms = lms2array(fld.face_landmarks[0])
-            # lms = lms * 30
+            lms = lms * 30
             print('LMS', lms[0])
 
             # tmat_inv = np.linalg.inv(tmat)
@@ -402,10 +403,6 @@ def ears(fld: FaceLandmarkerResult | None):
 class Msg:
     frame_src: str
     face_src: str
-    trans: list
-    rot: list
-    ear_left: str
-    ear_right: str
 
 
 @app.websocket("/ws")
@@ -416,77 +413,80 @@ async def ws(websocket: WebSocket):
     frames_crop, frames_small = tee(frames, 2)
 
     small_frames = gen_small_frames(frames_small)
-    small_frames, small_frames_pose, small_frames_faces = tee(small_frames, 3)
+    small_frames, small_frames_pose = tee(small_frames, 2)
 
-    faces = gen_faces(small_frames_faces)
+    # faces = gen_faces(small_frames_faces)
 
     poses = gen_pose(small_frames_pose)
-    poses, poses_crop, poses_trans = tee(poses, 3)
+    poses, poses_crop = tee(poses, 2)
 
-    trans = gen_trans(poses_trans)
+    # trans = gen_trans(poses_trans)
 
     crops = gen_crop_from_pose(frames_crop, poses_crop)
     crops, crops_fld = tee(crops, 2)
 
     flds = gen_flds(crops_fld)
-    flds, flds_norm = tee(flds, 2)
+    # flds, flds_norm = tee(flds, 2)
 
-    norm_flds = gen_norm_flds_2d(flds_norm)
+    # norm_flds = gen_norm_flds_2d(flds_norm)
     # rots = gen_rots(flds_rots)
+
+    can_face = trimesh.load('face_model_with_iris.obj')
+    assert type(can_face) == trimesh.Trimesh, type(can_face)
+    can_fld = can_face.vertices
+    can_fld = -can_fld
+    can_fld = can_fld - can_fld.min(axis=0)
+    can_fld = can_fld / can_fld.max()
 
     for (
         small_frame,
-        face,
+        # face,
         pose,
         crop,
         fld,
-        trans,
-        norm_fld
+        # trans,
+        # norm_fld
     ) in zip(
             small_frames,
-            faces,
+            # faces,
             poses,
             crops,
             flds,
-            trans,
-            norm_flds):
+            # trans,
+            # norm_flds
+    ):
 
         try:
+            assert small_frame is not None
             small_frame = cv2.cvtColor(small_frame, cv2.COLOR_RGB2BGR)
+
+            assert crop is not None
             crop = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
 
             small_frame = draw_pose_on_image(small_frame, pose)
             crop = draw_landmarks_on_image(crop, fld)
-            crop = draw_landmarks_2d(crop, norm_fld)
+            print('CAN_FLD', can_fld[0])
+            crop = draw_landmarks_2d(crop, can_fld[:, :2])
+            # crop = draw_landmarks_2d(crop, norm_fld)
             # crop = draw_head_pose(crop, head_pose, fld)
 
             # yaw, pitch = yaw_pitch(head_pose)
 
-            ear_left, ear_right = ears(fld)
+            # ear_left, ear_right = ears(fld)
 
             msg = Msg(
                 frame_src=encode_img(small_frame),
                 face_src=encode_img(crop),
-                ear_left=f'{ear_left:.2f}',
-                ear_right=f'{ear_right:.2f}',
-                trans=np.round(trans, 2).tolist(),
-                rot=[]
-                # rot=np.round(rots, 2).tolist()
             )
 
             msg = unstructure(msg)
-
-            ear_left = await websocket.send_json(msg)
+            await websocket.send_json(msg)
 
         except Exception:
             traceback.print_exc()
             msg = Msg(
                 frame_src=encode_img(small_frame),
-                face_src=encode_img(np.zeros((1, 1, 3), dtype=np.uint8)),
-                ear_left='-',
-                ear_right='-',
-                trans=[],
-                rot=[])
+                face_src=encode_img(np.zeros((1, 1, 3), dtype=np.uint8)))
 
             msg = unstructure(msg)
             await websocket.send_json(msg)
