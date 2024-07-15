@@ -38,9 +38,9 @@ app = FastAPI(debug=True)
 IMG_SIZE = np.array([640, 360])
 DIST_COEFFS = np.zeros((4, 1))
 CAM_MATRIX = np.array([
-    [1, 0, .5],
-    [0, 1, .5],
-    [0, 0, 1]])
+    [1, 0, 0],
+    [0, 1, 0],
+    [0, 0, 1]]).astype(np.float32)
 
 
 def encode_img(img: np.ndarray | None):
@@ -150,7 +150,7 @@ def draw_landmarks_2d(img: np.ndarray | None, lms: np.ndarray):
         h, w, _ = img.shape
         for x, y in lms:
             x, y = int(x * w), int(y * h)
-            cv2.circle(img, (x, y), 2, (255, 0, 0), -1)
+            cv2.circle(img, (x, y), 2, (0, 255, 0), -1)
 
     except Exception:
         pass
@@ -341,35 +341,48 @@ def gen_flds(crops: Iterable[np.ndarray | None]):
                 yield None
 
 
-def gen_norm_flds_2d(flds: Iterable[FaceLandmarkerResult | None]):
+def gen_pnp(flds: Iterable[FaceLandmarkerResult | None]):
+    can_face = trimesh.load('face_model_with_iris.obj')
+    assert type(can_face) == trimesh.Trimesh, type(can_face)
+    can_fld = can_face.vertices
+    can_fld = -can_fld
+    can_fld = can_fld.astype(np.float32)
+    # can_fld = can_fld - can_fld.min(axis=0)
+    # can_fld = can_fld / can_fld.max(axis=0)
+
     for fld in flds:
         try:
             assert fld is not None
 
-            tmat = fld.facial_transformation_matrixes[0]
+            lms = lms2array(fld.face_landmarks[0])
+            lms2d = lms[:, :2].astype(np.float32)
 
-            T, R, *_ = affines.decompose(tmat)
-            print('T', T)
-            # rot = Rotation.from_matrix(rot).as_euler('xyz', degrees=False)
+            _, rvec, T = cv2.solvePnP(
+                objectPoints=can_fld,
+                imagePoints=lms2d,
+                cameraMatrix=CAM_MATRIX,
+                distCoeffs=DIST_COEFFS,
+                flags=cv2.SOLVEPNP_ITERATIVE)
+
+            R, _ = cv2.Rodrigues(rvec)
             R_inv = np.linalg.inv(R)
 
-            # print('ROT', rot.shape)
-            # yield rot
+            print('R', R)
+            print('T', T)
 
-            lms = fld.face_landmarks[0]
-            lms = lms2array(fld.face_landmarks[0])
-            lms = lms * 30
-            print('LMS', lms[0])
+            proj = (R_inv @ lms.T).T - (R_inv @ T).T
+            # proj = (R @ lms.T).T + T.T
+            # proj = (R_inv @ lms.T).T - (R_inv @ T).T
+            proj[:, 1] = -proj[:, 1]
 
-            # tmat_inv = np.linalg.inv(tmat)
-            # lms = np.hstack([lms, np.ones((lms.shape[0], 1))])
-            # lms_norm = (R_inv @ lms.T).T - (R_inv @ T)
-            lms_norm = (R @ lms.T).T
-            # lms_norm = (R @ lms.T).T + T
-            # lms_norm = lms_norm / 30
+            proj2d = proj[:, :2]
+            proj2d = proj2d - proj2d.min(axis=0)
+            proj2d = proj2d / proj2d.max(axis=0)
 
-            print('LMS_NORM', lms_norm[0])
-            yield lms_norm[:, :2]
+            assert lms2d.shape == proj2d.shape, (lms2d.shape, proj2d.shape)
+            # print('PROJ', proj2d[:10])
+
+            yield proj2d
 
         except Exception:
             traceback.print_exc()
@@ -426,34 +439,22 @@ async def ws(websocket: WebSocket):
     crops, crops_fld = tee(crops, 2)
 
     flds = gen_flds(crops_fld)
-    # flds, flds_norm = tee(flds, 2)
+    flds, flds_pnp = tee(flds, 2)
 
-    # norm_flds = gen_norm_flds_2d(flds_norm)
-    # rots = gen_rots(flds_rots)
-
-    can_face = trimesh.load('face_model_with_iris.obj')
-    assert type(can_face) == trimesh.Trimesh, type(can_face)
-    can_fld = can_face.vertices
-    can_fld = -can_fld
-    can_fld = can_fld - can_fld.min(axis=0)
-    can_fld = can_fld / can_fld.max()
+    projs = gen_pnp(flds_pnp)
 
     for (
         small_frame,
-        # face,
         pose,
         crop,
         fld,
-        # trans,
-        # norm_fld
+        proj
     ) in zip(
             small_frames,
-            # faces,
             poses,
             crops,
             flds,
-            # trans,
-            # norm_flds
+            projs
     ):
 
         try:
@@ -461,12 +462,13 @@ async def ws(websocket: WebSocket):
             small_frame = cv2.cvtColor(small_frame, cv2.COLOR_RGB2BGR)
 
             assert crop is not None
-            crop = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
+            crop[:, :, :] = 255
+            # crop = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
 
             small_frame = draw_pose_on_image(small_frame, pose)
-            crop = draw_landmarks_on_image(crop, fld)
-            print('CAN_FLD', can_fld[0])
-            crop = draw_landmarks_2d(crop, can_fld[:, :2])
+            # crop = draw_landmarks_on_image(crop, fld)
+            # print('CAN_FLD', can_fld[0])
+            crop = draw_landmarks_2d(crop, proj)
             # crop = draw_landmarks_2d(crop, norm_fld)
             # crop = draw_head_pose(crop, head_pose, fld)
 
