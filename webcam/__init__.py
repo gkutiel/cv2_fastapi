@@ -415,8 +415,16 @@ async def ws(websocket: WebSocket):
                 'rot': np.round(rots, 2).tolist(),
                 'ear_left': f'{ear_left:.2f}',
                 'ear_right': f'{ear_right:.2f}'})
+
         except Exception:
             traceback.print_exc()
+            await websocket.send_json({
+                'img': encode_img(small_frame),
+                'crop': encode_img(small_frame),
+                'trans': [],
+                'rot': [],
+                'ear_left': 0,
+                'ear_right': 0})
 
 
 if __name__ == '__main__':
