@@ -361,6 +361,7 @@ def gen_pitch_yaw_roll(flds: Iterable[FaceLandmarkerResult | None]):
 
         x, y, z = chin2head
         pitch = atan2(y, z) - np.pi / 2
+        pitch = -pitch
 
         return Rot(yaw=yaw, pitch=pitch, roll=roll)
 
@@ -371,17 +372,11 @@ def gen_pitch_yaw_roll(flds: Iterable[FaceLandmarkerResult | None]):
             lms = lms2array(fld.face_landmarks[0])
 
             ear2ear = lms[454] - lms[234]
-            # y axis is inverted
             chin2head = lms[152] - lms[10]
 
             r = rot(ear2ear, chin2head)
-            print('ear2ear', ear2ear)
-            print('chin2head', chin2head)
-            print('Pitch, Yaw, Roll', r.angles)
 
             xyz = -r.pitch_yaw_roll
-            print('Euler', Rotation.from_rotvec(
-                xyz).as_euler('xyz', degrees=True))
             yield Rotation.from_rotvec(xyz).as_matrix()
         except Exception:
             traceback.print_exc()
@@ -461,7 +456,11 @@ async def ws(websocket: WebSocket):
             assert fld is not None
             fld3d = lms2array(fld.face_landmarks[0])
             fld3d = (rmat @ fld3d.T).T
-            draw_landmarks_2d(crop, fld3d[:, :2])
+            fld2d = fld3d[:, :2]
+            fld2d -= fld2d[4]
+            fld2d += 0.5
+            print('FLD2D', fld2d[:2])
+            draw_landmarks_2d(crop, fld2d)
 
             msg = Msg(
                 frame_src=encode_img(small_frame),
