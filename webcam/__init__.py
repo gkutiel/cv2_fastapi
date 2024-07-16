@@ -162,6 +162,9 @@ def draw_landmarks_2d(img: np.ndarray | None, lms: np.ndarray):
 def draw_landmarks_on_image(img: np.ndarray | None, fld: FaceLandmarkerResult | None):
     try:
         assert fld is not None
+        assert img is not None
+
+        print('DRAW', img.shape, img.dtype)
 
         face_landmarks_proto = landmark_pb2.NormalizedLandmarkList()  # type: ignore
         face_landmarks_proto.landmark.extend([
@@ -450,7 +453,7 @@ async def ws(websocket: WebSocket):
 
             assert crop is not None
             crop = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
-            # crop = draw_landmarks_on_image(crop, fld)
+            crop = draw_landmarks_on_image(crop, fld)
             # crop[:, :, :] = 255
 
             assert fld is not None
@@ -459,8 +462,7 @@ async def ws(websocket: WebSocket):
             fld2d = fld3d[:, :2]
             fld2d -= fld2d[4]
             fld2d += 0.5
-            print('FLD2D', fld2d[:2])
-            draw_landmarks_2d(crop, fld2d)
+            # draw_landmarks_2d(crop, fld2d)
 
             msg = Msg(
                 frame_src=encode_img(small_frame),
