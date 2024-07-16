@@ -2,6 +2,7 @@ import base64
 import traceback
 from dataclasses import dataclass
 from itertools import tee
+from math import atan2
 from typing import Iterable, cast
 
 import cv2
@@ -300,19 +301,6 @@ def gen_crop_from_pose(frames: Iterable[np.ndarray | None], poses: Iterable[Pose
             yield None
 
 
-def gen_trans(poses: Iterable[PoseLandmarkerResult | None]):
-    for pose in poses:
-        try:
-            assert pose is not None
-
-            # lms = lms2array(pose.pose_world_landmarks[0])
-            lms = lms2array(pose.pose_landmarks[0])
-            yield lms[0]
-        except Exception:
-            traceback.print_exc()
-            yield np.zeros(3)
-
-
 def gen_flds(crops: Iterable[np.ndarray | None]):
     fld_options = FaceLandmarkerOptions(
         base_options=python.BaseOptions(
@@ -341,52 +329,63 @@ def gen_flds(crops: Iterable[np.ndarray | None]):
                 yield None
 
 
-def gen_pnp(flds: Iterable[FaceLandmarkerResult | None]):
-    can_face = trimesh.load('face_model_with_iris.obj')
-    assert type(can_face) == trimesh.Trimesh, type(can_face)
-    can_fld = can_face.vertices
-    can_fld = -can_fld
-    can_fld = can_fld.astype(np.float32)
-    # can_fld = can_fld - can_fld.min(axis=0)
-    # can_fld = can_fld / can_fld.max(axis=0)
+@dataclass(kw_only=True)
+class Rot:
+    yaw: float
+    pitch: float
+    roll: float
+
+    @property
+    def pitch_yaw_roll(self):
+        return np.array([self.pitch, self.yaw, self.roll])
+
+    @property
+    def rvec(self):
+        return self.pitch_yaw_roll
+
+    @property
+    def angles(self):
+        return self.pitch_yaw_roll * 180 / np.pi
+
+
+def gen_pitch_yaw_roll(flds: Iterable[FaceLandmarkerResult | None]):
+    def rot(ear2ear: np.ndarray, chin2head: np.ndarray):
+        assert ear2ear.shape == chin2head.shape == (3,)
+
+        assert abs(ear2ear @ chin2head) < .1, \
+            f'vectors must be orthogonal, got {ear2ear @ chin2head}'
+
+        x, y, z = ear2ear
+        yaw = -atan2(z, x)
+        roll = atan2(y, x)
+
+        x, y, z = chin2head
+        pitch = atan2(y, z) - np.pi / 2
+
+        return Rot(yaw=yaw, pitch=pitch, roll=roll)
 
     for fld in flds:
         try:
             assert fld is not None
 
             lms = lms2array(fld.face_landmarks[0])
-            lms2d = lms[:, :2].astype(np.float32)
 
-            _, rvec, T = cv2.solvePnP(
-                objectPoints=can_fld,
-                imagePoints=lms2d,
-                cameraMatrix=CAM_MATRIX,
-                distCoeffs=DIST_COEFFS,
-                flags=cv2.SOLVEPNP_ITERATIVE)
+            ear2ear = lms[454] - lms[234]
+            # y axis is inverted
+            chin2head = lms[152] - lms[10]
 
-            R, _ = cv2.Rodrigues(rvec)
-            R_inv = np.linalg.inv(R)
+            r = rot(ear2ear, chin2head)
+            print('ear2ear', ear2ear)
+            print('chin2head', chin2head)
+            print('Pitch, Yaw, Roll', r.angles)
 
-            print('R', R)
-            print('T', T)
-
-            proj = (R_inv @ lms.T).T - (R_inv @ T).T
-            # proj = (R @ lms.T).T + T.T
-            # proj = (R_inv @ lms.T).T - (R_inv @ T).T
-            proj[:, 1] = -proj[:, 1]
-
-            proj2d = proj[:, :2]
-            proj2d = proj2d - proj2d.min(axis=0)
-            proj2d = proj2d / proj2d.max(axis=0)
-
-            assert lms2d.shape == proj2d.shape, (lms2d.shape, proj2d.shape)
-            # print('PROJ', proj2d[:10])
-
-            yield proj2d
-
+            xyz = -r.pitch_yaw_roll
+            print('Euler', Rotation.from_rotvec(
+                xyz).as_euler('xyz', degrees=True))
+            yield Rotation.from_rotvec(xyz).as_matrix()
         except Exception:
             traceback.print_exc()
-            yield np.zeros(3)
+            yield None
 
 
 def ears(fld: FaceLandmarkerResult | None):
@@ -422,59 +421,47 @@ class Msg:
 async def ws(websocket: WebSocket):
     await websocket.accept()
 
-    frames = gen_frames()
-    frames_crop, frames_small = tee(frames, 2)
+    frames_crop, frames_small = tee(gen_frames(), 2)
 
     small_frames = gen_small_frames(frames_small)
     small_frames, small_frames_pose = tee(small_frames, 2)
 
-    # faces = gen_faces(small_frames_faces)
+    poses, poses_crop = tee(gen_pose(small_frames_pose), 2)
 
-    poses = gen_pose(small_frames_pose)
-    poses, poses_crop = tee(poses, 2)
+    crops, crops_fld = tee(gen_crop_from_pose(frames_crop, poses_crop), 2)
 
-    # trans = gen_trans(poses_trans)
+    flds, flds_align_rvec = tee(gen_flds(crops_fld), 2)
 
-    crops = gen_crop_from_pose(frames_crop, poses_crop)
-    crops, crops_fld = tee(crops, 2)
-
-    flds = gen_flds(crops_fld)
-    flds, flds_pnp = tee(flds, 2)
-
-    projs = gen_pnp(flds_pnp)
+    rmats = gen_pitch_yaw_roll(flds_align_rvec)
 
     for (
         small_frame,
         pose,
         crop,
         fld,
-        proj
+        rmat,
     ) in zip(
             small_frames,
             poses,
             crops,
             flds,
-            projs
+            rmats,
     ):
 
         try:
             assert small_frame is not None
             small_frame = cv2.cvtColor(small_frame, cv2.COLOR_RGB2BGR)
+            small_frame = draw_pose_on_image(small_frame, pose)
 
             assert crop is not None
-            crop[:, :, :] = 255
-            # crop = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
-
-            small_frame = draw_pose_on_image(small_frame, pose)
+            crop = cv2.cvtColor(crop, cv2.COLOR_RGB2BGR)
             # crop = draw_landmarks_on_image(crop, fld)
-            # print('CAN_FLD', can_fld[0])
-            crop = draw_landmarks_2d(crop, proj)
-            # crop = draw_landmarks_2d(crop, norm_fld)
-            # crop = draw_head_pose(crop, head_pose, fld)
+            # crop[:, :, :] = 255
 
-            # yaw, pitch = yaw_pitch(head_pose)
-
-            # ear_left, ear_right = ears(fld)
+            assert fld is not None
+            fld3d = lms2array(fld.face_landmarks[0])
+            fld3d = (rmat @ fld3d.T).T
+            draw_landmarks_2d(crop, fld3d[:, :2])
 
             msg = Msg(
                 frame_src=encode_img(small_frame),
